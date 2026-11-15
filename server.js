@@ -15,6 +15,25 @@ function json(res, status, value) {
   res.end(JSON.stringify(value));
 }
 
+function parseIsoTimestamp(value) {
+  const match = typeof value === 'string'
+    && value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/);
+  if (!match) return null;
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, timeZone] = match;
+  const year = Number(yearText), month = Number(monthText), day = Number(dayText);
+  const hour = Number(hourText), minute = Number(minuteText), second = Number(secondText);
+  const daysInMonth = [31, (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : 28,
+    31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]
+    || hour > 23 || minute > 59 || second > 59) return null;
+  if (timeZone !== 'Z' && (Number(timeZone.slice(1, 3)) > 23 || Number(timeZone.slice(4, 6)) > 59)) return null;
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 async function readBody(req) {
   let size = 0;
   const chunks = [];
@@ -44,7 +63,12 @@ export function createStarterServer({ requests = seed } = {}) {
       }
       if (req.method === 'GET' && pathname === '/api/next-request') {
         const rank = { urgent: 0, normal: 1, low: 2 };
-        const request = records.filter(record => record.status === 'open')
+        const now = Date.now();
+        const request = records.filter(record => {
+          if (record.status !== 'open') return false;
+          const snoozedUntil = parseIsoTimestamp(record.snoozedUntil);
+          return snoozedUntil === null || snoozedUntil <= now;
+        })
           .toSorted((a, b) => rank[a.urgency] - rank[b.urgency]
             || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] || null;
         return json(res, 200, { request, reason: request ? 'Highest urgency, then oldest request.' : 'No open requests remain.' });

@@ -51,6 +51,42 @@ test('next request recommends only open requests by urgency, age, then ascending
   });
 });
 
+test('next request excludes only open requests with a valid future snooze timestamp', async t => {
+  const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const expired = new Date(Date.now() - 60 * 1000).toISOString();
+  const call = await fixture(t, { requests: [
+    { id: 'GD-001', urgency: 'urgent', status: 'open', createdAt: '2026-11-03T07:00:00Z', snoozedUntil: future },
+    { id: 'GD-002', urgency: 'urgent', status: 'open', createdAt: '2026-11-03T08:00:00Z', snoozedUntil: expired },
+    { id: 'GD-003', urgency: 'urgent', status: 'open', createdAt: '2026-11-03T08:10:00Z' },
+    { id: 'GD-004', urgency: 'urgent', status: 'open', createdAt: '2026-11-03T08:20:00Z', snoozedUntil: 'not-a-timestamp' },
+    { id: 'GD-005', urgency: 'urgent', status: 'open', createdAt: '2026-11-03T08:30:00Z', snoozedUntil: '2099-02-30T00:00:00Z' },
+    { id: 'GD-000', urgency: 'urgent', status: 'resolved', createdAt: '2026-11-03T06:00:00Z' },
+    { id: 'GD-006', urgency: 'normal', status: 'open', createdAt: '2026-11-03T05:00:00Z' },
+    { id: 'GD-007', urgency: 'low', status: 'open', createdAt: '2026-11-03T04:00:00Z' },
+  ] });
+
+  const nextId = async () => (await (await call('/api/next-request')).json()).request.id;
+  const resolve = async id => {
+    const response = await call(`/api/requests/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'resolved' }),
+    });
+    assert.equal(response.status, 200);
+  };
+
+  assert.equal(await nextId(), 'GD-002');
+  await resolve('GD-002');
+  assert.equal(await nextId(), 'GD-003');
+  await resolve('GD-003');
+  assert.equal(await nextId(), 'GD-004');
+  await resolve('GD-004');
+  assert.equal(await nextId(), 'GD-005');
+  await resolve('GD-005');
+  assert.equal(await nextId(), 'GD-006');
+  await resolve('GD-006');
+  assert.equal(await nextId(), 'GD-007');
+});
+
 test('invalid updates and unknown paths do not mutate the inbox or expose source', async t => {
   const call = await fixture(t);
   for (const body of ['null', '{}', 'not-json', '{"status":"missing"}']) assert.equal((await call('/api/requests/GD-103', { method: 'PATCH', body })).status, 400);
